@@ -1,0 +1,14 @@
+{
+	https_port 8443
+	auto_https disable_redirects
+}
+
+bookio.duckdns.org {
+	tls {
+		issuer acme {$ACME_CA} {
+			email {$ACME_EMAIL}
+			disable_http_challenge
+		}
+	}
+	reverse_proxy bookio-backend:8080
+}
