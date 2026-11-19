@@ -24,7 +24,7 @@ services:
       start_period: 60s
 
   bookio-backend:
-    build: .
+    image: ghcr.io/umor1st/bookio-backend:latest
     restart: unless-stopped
     environment:
       PORT: 8080
