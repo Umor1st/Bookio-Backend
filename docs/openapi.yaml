@@ -1,0 +1,1938 @@
+openapi: 3.1.0
+info:
+  title: Bookio API
+  version: 1.0.0
+  description: 'REST API приложения школьной библиотеки Bookio. Время — в UTC, формат RFC 3339 с Z. Для защищённых
+    операций x-allowed-roles задаёт разрешённые роли, x-required-account-status — допустимые статусы аккаунта; пустой
+    x-allowed-roles и security: [] обозначают публичную операцию. Владение заявками проверяется сервером. Статусы
+    заявок: PROCESSING→APPROVED/REJECTED/COMPLETED, APPROVED→ISSUED/COMPLETED, ISSUED→OVERDUE/COMPLETED, OVERDUE→COMPLETED.
+    Общий источник истины о доступности — серверные заявки, а не клиентские счётчики.'
+servers:
+- url: https://bookio.duckdns.org
+  description: Развёртывание на VPS.
+tags:
+- name: Auth
+  description: Регистрация, вход и управление сессией.
+- name: Books
+  description: Каталог, жанры, обложки и управление книгами.
+- name: Reservations
+  description: Бронирование, выдача, возврат и автоматические сроки.
+- name: Favorites
+  description: Избранные книги ученика.
+- name: Reviews
+  description: Одна редактируемая рецензия на пару ученик/книга.
+- name: Students
+  description: Подтверждение и просмотр учеников библиотекарем.
+security:
+- bearerAuth: []
+paths:
+  /api/v1/auth/register:
+    post:
+      tags:
+      - Auth
+      operationId: registerStudent
+      summary: Зарегистрировать ученика
+      description: Всегда создаёт роль STUDENT и статус PENDING; учётная запись библиотекаря создаётся заранее.
+      x-allowed-roles: []
+      x-access: public
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Создано.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/auth/login:
+    post:
+      tags:
+      - Auth
+      operationId: login
+      summary: Войти в систему
+      description: PENDING/REJECTED могут войти для получения своего статуса, но не работать с библиотекой.
+      x-allowed-roles: []
+      x-access: public
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Успешно.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/auth/logout:
+    post:
+      tags:
+      - Auth
+      operationId: logout
+      summary: Отозвать текущую сессию
+      x-allowed-roles:
+      - STUDENT
+      - LIBRARIAN
+      x-required-account-status:
+      - PENDING
+      - ACTIVE
+      - REJECTED
+      responses:
+        '204':
+          description: Успешно, без тела.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/auth/me:
+    get:
+      tags:
+      - Auth
+      operationId: getCurrentUser
+      summary: Получить текущего пользователя
+      x-allowed-roles:
+      - STUDENT
+      - LIBRARIAN
+      x-required-account-status:
+      - PENDING
+      - ACTIVE
+      - REJECTED
+      responses:
+        '200':
+          description: Успешно.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/books:
+    get:
+      tags:
+      - Books
+      operationId: listBooks
+      summary: Получить каталог
+      description: 'Обычный каталог исключает архивированные книги. Для default: дата добавления по убыванию, затем
+        ID. Книги без оценок при сортировке по рейтингу идут последними.'
+      x-allowed-roles:
+      - STUDENT
+      - LIBRARIAN
+      x-required-account-status:
+      - ACTIVE
+      parameters:
+      - name: search
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Поиск по названию или автору.
+      - name: genreId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: author
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: year
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: publisher
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: sort
+        in: query
+        required: false
+        schema:
+          $ref: '#/components/schemas/BookSort'
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Успешно.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    post:
+      tags:
+      - Books
+      operationId: createBook
+      summary: Добавить книгу
+      description: Жанры задаются именами, после создания обложку можно загрузить отдельно.
+      x-allowed-roles:
+      - LIBRARIAN
+      x-required-account-status:
+      - ACTIVE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BookCreateRequest'
+      responses:
+        '201':
+          description: Создано.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookDetail'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/books/{id}:
+    get:
+      tags:
+      - Books
+      operationId: getBook
+      summary: Получить карточку книги
+      x-allowed-roles:
+      - STUDENT
+      - LIBRARIAN
+      x-required-account-status:
+      - ACTIVE
+      parameters:
+      - $ref: '#/components/parameters/BookId'
+      responses:
+        '200':
+          description: Успешно.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    patch:
+      tags:
+      - Books
+      operationId: updateBook
+      summary: Изменить книгу
+      description: totalCopies не может быть меньше числа зарезервированных и выданных экземпляров.
+      x-allowed-roles:
+      - LIBRARIAN
+      x-required-account-status:
+      - ACTIVE
+      parameters:
+      - $ref: '#/components/parameters/BookId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BookUpdateRequest'
+      responses:
+        '200':
+          description: Успешно.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookDetail'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    delete:
+      tags:
+      - Books
+      operationId: archiveBook
+      summary: Архивировать книгу
+      description: Физически не удалять. Если есть активные заявки, вернуть BOOK_HAS_ACTIVE_RESERVATIONS.
+      x-allowed-roles:
+      - LIBRARIAN
+      x-required-account-status:
+      - ACTIVE
+      parameters:
+      - $ref: '#/components/parameters/BookId'
+      responses:
+        '204':
+          description: Успешно, без тела.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/books/{id}/cover:
+    post:
+      tags:
+      - Books
+      operationId: uploadBookCover
+      summary: Загрузить обложку книги
+      x-allowed-roles:
+      - LIBRARIAN
+      x-required-account-status:
+      - ACTIVE
+      parameters:
+      - $ref: '#/components/parameters/BookId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  description: JPEG, PNG или WebP; клиент по возможности предварительно преобразует в WebP.
+                  format: binary
+              required:
+              - file
+              additionalProperties: false
+        description: На сервере проверяются фактический формат и размер файла; хранение в WebP.
+      responses:
+        '204':
+          description: Успешно, без тела.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/genres:
+    get:
+      tags:
+      - Books
+      operationId: listGenres
+      summary: Получить справочник жанров
+      x-allowed-roles:
+      - STUDENT
+      - LIBRARIAN
+      x-required-account-status:
+      - ACTIVE
+      parameters:
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Успешно.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenreListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/reservations:
+    post:
+      tags:
+      - Reservations
+      operationId: createReservation
+      summary: Забронировать книгу
+      description: Создание PROCESSING сразу резервирует экземпляр в транзакции с блокировкой книги. Ученик не может
+        создать вторую активную бронь этой книги или любую новую бронь при просрочке.
+      x-allowed-roles:
+      - STUDENT
+      x-required-account-status:
+      - ACTIVE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateReservationRequest'
+      responses:
+        '201':
+          description: Создано.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reservation'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    get:
+      tags:
+      - Reservations
+      operationId: listReservations
+      summary: Получить заявки для библиотекаря
+      x-allowed-roles:
+      - LIBRARIAN
+      x-required-account-status:
+      - ACTIVE
+      parameters:
+      - name: status
+        in: query
+        required: false
+        schema:
+          $ref: '#/components/schemas/ReservationStatus'
+        description: Если не указан, возвращаются активные заявки.
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Успешно.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReservationListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/reservations/my:
+    get:
+      tags:
+      - Reservations
+      operationId: listMyReservations
+      summary: Получить собственные заявки
+      x-allowed-roles:
+      - STUDENT
+      x-required-account-status:
+      - ACTIVE
+      parameters:
+      - name: group
+        in: query
+        required: false
+        schema:
+          $ref: '#/components/schemas/ReservationGroup'
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Успешно.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReservationListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/reservations/{id}:
+    get:
+      tags:
+      - Reservations
+      operationId: getReservation
+      summary: Получить детали заявки
+      description: Ученик имеет доступ только к собственной заявке; библиотекарь — к любой.
+      x-allowed-roles:
+      - STUDENT
+      - LIBRARIAN
+      x-required-account-status:
+      - ACTIVE
+      parameters:
+      - $ref: '#/components/parameters/ReservationId'
+      responses:
+        '200':
+          description: Успешно.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reservation'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/reservations/{id}/cancel:
+    post:
+      tags:
+      - Reservations
+      operationId: cancelReservation
+      summary: Отменить заявку до выдачи
+      description: Ученик отменяет только свою PROCESSING/APPROVED; библиотекарь может отменить PROCESSING/APPROVED.
+        Итоговый статус COMPLETED с соответствующим closeReason.
+      x-allowed-roles:
+      - STUDENT
+      - LIBRARIAN
+      x-required-account-status:
+      - ACTIVE
+      parameters:
+      - $ref: '#/components/parameters/ReservationId'
+      responses:
+        '200':
+          description: Успешно.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reservation'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/reservations/{id}/approve:
+    post:
+      tags:
+      - Reservations
+      operationId: approveReservation
+      summary: Одобрить заявку
+      description: PROCESSING → APPROVED; срок получения = approvedAt + 72 часа, утверждённый срок выдачи 14 или 28
+        дней.
+      x-allowed-roles:
+      - LIBRARIAN
+      x-required-account-status:
+      - ACTIVE
+      parameters:
+      - $ref: '#/components/parameters/ReservationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveReservationRequest'
+      responses:
+        '200':
+          description: Успешно.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reservation'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/reservations/{id}/reject:
+    post:
+      tags:
+      - Reservations
+      operationId: rejectReservation
+      summary: Отклонить заявку
+      description: PROCESSING → REJECTED; причина отказа необязательна.
+      x-allowed-roles:
+      - LIBRARIAN
+      x-required-account-status:
+      - ACTIVE
+      parameters:
+      - $ref: '#/components/parameters/ReservationId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RejectReservationRequest'
+      responses:
+        '200':
+          description: Успешно.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reservation'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/reservations/{id}/issue:
+    post:
+      tags:
+      - Reservations
+      operationId: issueReservation
+      summary: Подтвердить выдачу книги
+      description: APPROVED → ISSUED до истечения pickupDeadlineAt; сервер устанавливает issuedAt и dueAt от времени
+        выдачи.
+      x-allowed-roles:
+      - LIBRARIAN
+      x-required-account-status:
+      - ACTIVE
+      parameters:
+      - $ref: '#/components/parameters/ReservationId'
+      responses:
+        '200':
+          description: Успешно.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reservation'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/reservations/{id}/complete:
+    post:
+      tags:
+      - Reservations
+      operationId: completeReservation
+      summary: Подтвердить возврат книги
+      description: ISSUED/OVERDUE → COMPLETED, closeReason=RETURNED.
+      x-allowed-roles:
+      - LIBRARIAN
+      x-required-account-status:
+      - ACTIVE
+      parameters:
+      - $ref: '#/components/parameters/ReservationId'
+      responses:
+        '200':
+          description: Успешно.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reservation'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/favorites:
+    get:
+      tags:
+      - Favorites
+      operationId: listFavorites
+      summary: Получить избранные книги
+      description: Архивные книги исключаются из основного списка избранного; связи сохраняются.
+      x-allowed-roles:
+      - STUDENT
+      x-required-account-status:
+      - ACTIVE
+      parameters:
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Успешно.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FavoriteListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/favorites/{bookId}:
+    put:
+      tags:
+      - Favorites
+      operationId: addFavorite
+      summary: Добавить книгу в избранное
+      description: Идемпотентная операция.
+      x-allowed-roles:
+      - STUDENT
+      x-required-account-status:
+      - ACTIVE
+      parameters:
+      - $ref: '#/components/parameters/FavoriteBookId'
+      responses:
+        '204':
+          description: Успешно, без тела.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    delete:
+      tags:
+      - Favorites
+      operationId: removeFavorite
+      summary: Удалить книгу из избранного
+      x-allowed-roles:
+      - STUDENT
+      x-required-account-status:
+      - ACTIVE
+      parameters:
+      - $ref: '#/components/parameters/FavoriteBookId'
+      responses:
+        '204':
+          description: Успешно, без тела.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/books/{id}/reviews:
+    get:
+      tags:
+      - Reviews
+      operationId: listBookReviews
+      summary: Получить рецензии на книгу
+      x-allowed-roles:
+      - STUDENT
+      - LIBRARIAN
+      x-required-account-status:
+      - ACTIVE
+      parameters:
+      - $ref: '#/components/parameters/BookId'
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Успешно.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/books/{id}/my-review:
+    put:
+      tags:
+      - Reviews
+      operationId: saveMyReview
+      summary: Создать или изменить собственную рецензию
+      description: Одна рецензия на книгу; разрешена после фактической выдачи (issuedAt заполнен).
+      x-allowed-roles:
+      - STUDENT
+      x-required-account-status:
+      - ACTIVE
+      parameters:
+      - $ref: '#/components/parameters/BookId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewRequest'
+      responses:
+        '200':
+          description: Успешно.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Review'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    delete:
+      tags:
+      - Reviews
+      operationId: deleteMyReview
+      summary: Удалить собственную рецензию
+      x-allowed-roles:
+      - STUDENT
+      x-required-account-status:
+      - ACTIVE
+      parameters:
+      - $ref: '#/components/parameters/BookId'
+      responses:
+        '204':
+          description: Успешно, без тела.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/students:
+    get:
+      tags:
+      - Students
+      operationId: listStudents
+      summary: Получить список учеников
+      description: Сведения содержат hasOverdue; группировка по классу возможна на клиенте.
+      x-allowed-roles:
+      - LIBRARIAN
+      x-required-account-status:
+      - ACTIVE
+      parameters:
+      - name: accountStatus
+        in: query
+        required: false
+        schema:
+          $ref: '#/components/schemas/AccountStatus'
+      - name: className
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: overdueOnly
+        in: query
+        required: false
+        schema:
+          type: boolean
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Успешно.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/students/{id}:
+    get:
+      tags:
+      - Students
+      operationId: getStudent
+      summary: Получить ученика
+      x-allowed-roles:
+      - LIBRARIAN
+      x-required-account-status:
+      - ACTIVE
+      parameters:
+      - $ref: '#/components/parameters/StudentId'
+      responses:
+        '200':
+          description: Успешно.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Student'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    patch:
+      tags:
+      - Students
+      operationId: updateStudent
+      summary: Изменить ФИО или класс ученика
+      x-allowed-roles:
+      - LIBRARIAN
+      x-required-account-status:
+      - ACTIVE
+      parameters:
+      - $ref: '#/components/parameters/StudentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateStudentRequest'
+      responses:
+        '200':
+          description: Успешно.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Student'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/students/{id}/status:
+    patch:
+      tags:
+      - Students
+      operationId: updateStudentStatus
+      summary: Подтвердить или отклонить регистрацию
+      x-allowed-roles:
+      - LIBRARIAN
+      x-required-account-status:
+      - ACTIVE
+      parameters:
+      - $ref: '#/components/parameters/StudentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateStudentStatusRequest'
+      responses:
+        '200':
+          description: Успешно.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Student'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Непрозрачный серверный токен из /api/v1/auth/login.
+  parameters:
+    BookId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: ID книги.
+    ReservationId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: ID заявки.
+    StudentId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: ID ученика.
+    FavoriteBookId:
+      name: bookId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: ID книги.
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    Offset:
+      name: offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+  responses:
+    BadRequest:
+      description: Некорректный запрос.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Отсутствующая или недействительная сессия.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Недостаточно прав, неподтверждённый аккаунт или чужой ресурс.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Ресурс не найден.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Конфликт с бизнес-правилом.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    PayloadTooLarge:
+      description: Файл слишком большой.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    UnsupportedMediaType:
+      description: Неподдерживаемый формат файла.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    TooManyRequests:
+      description: Превышена частота запросов.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    InternalServerError:
+      description: Внутренняя ошибка сервера.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    UtcDateTime:
+      type: string
+      format: date-time
+      pattern: Z$
+      description: Момент времени в UTC (RFC 3339, суффикс Z).
+    Role:
+      type: string
+      description: Роль учётной записи.
+      enum:
+      - STUDENT
+      - LIBRARIAN
+    AccountStatus:
+      type: string
+      description: Статус регистрации ученика.
+      enum:
+      - PENDING
+      - ACTIVE
+      - REJECTED
+    ReservationStatus:
+      type: string
+      description: Статус заявки; допустимые переходы изложены в описании операций.
+      enum:
+      - PROCESSING
+      - APPROVED
+      - ISSUED
+      - OVERDUE
+      - REJECTED
+      - COMPLETED
+    CloseReason:
+      type: string
+      description: Причина завершения заявки со статусом COMPLETED.
+      enum:
+      - RETURNED
+      - CANCELLED_BY_STUDENT
+      - CANCELLED_BY_LIBRARIAN
+      - PICKUP_EXPIRED
+    BookSort:
+      type: string
+      description: Сортировка каталога; по умолчанию дата добавления по убыванию, затем ID.
+      enum:
+      - default
+      - rating_desc
+      - rating_asc
+    ReservationGroup:
+      type: string
+      description: Группировка заявок ученика.
+      enum:
+      - active
+      - completed
+    LoanDuration:
+      type: integer
+      enum:
+      - 14
+      - 28
+      description: Продолжительность выдачи в днях (14 либо 28).
+    ErrorCode:
+      type: string
+      description: Согласованные бизнес-коды ошибок из архитектурного контракта.
+      enum:
+      - LOGIN_ALREADY_EXISTS
+      - INVALID_CREDENTIALS
+      - SESSION_EXPIRED
+      - ACCOUNT_NOT_APPROVED
+      - FORBIDDEN
+      - BOOK_NOT_FOUND
+      - BOOK_NOT_ACCEPTING_RESERVATIONS
+      - NO_AVAILABLE_COPIES
+      - ACTIVE_RESERVATION_EXISTS
+      - OVERDUE_BLOCK
+      - INVALID_DURATION
+      - INVALID_RESERVATION_STATE
+      - PICKUP_EXPIRED
+      - STOCK_BELOW_COMMITTED
+      - BOOK_HAS_ACTIVE_RESERVATIONS
+      - REVIEW_NOT_ALLOWED
+      - INVALID_IMAGE
+    ErrorDetails:
+      type: object
+      description: Дополнительные сведения об ошибке; структура зависит от кода.
+      additionalProperties: true
+    Error:
+      type: object
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        message:
+          type: string
+        details:
+          $ref: '#/components/schemas/ErrorDetails'
+      required:
+      - code
+      - message
+      - details
+      additionalProperties: false
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          $ref: '#/components/schemas/Error'
+      required:
+      - error
+      additionalProperties: false
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        login:
+          type: string
+        fullName:
+          type: string
+        className:
+          type:
+          - string
+          - 'null'
+        role:
+          $ref: '#/components/schemas/Role'
+        status:
+          $ref: '#/components/schemas/AccountStatus'
+      required:
+      - id
+      - login
+      - fullName
+      - className
+      - role
+      - status
+      additionalProperties: false
+    RegisterRequest:
+      type: object
+      properties:
+        login:
+          type: string
+        password:
+          type: string
+          format: password
+        fullName:
+          type: string
+        className:
+          type: string
+      required:
+      - login
+      - password
+      - fullName
+      - className
+      additionalProperties: false
+    RegisterResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        login:
+          type: string
+        role:
+          $ref: '#/components/schemas/Role'
+        status:
+          $ref: '#/components/schemas/AccountStatus'
+      required:
+      - id
+      - login
+      - role
+      - status
+      additionalProperties: false
+    LoginRequest:
+      type: object
+      properties:
+        login:
+          type: string
+        password:
+          type: string
+          format: password
+      required:
+      - login
+      - password
+      additionalProperties: false
+    LoginResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+          description: Непрозрачный случайный Bearer-токен.
+        tokenType:
+          type: string
+          enum:
+          - Bearer
+        expiresAt:
+          $ref: '#/components/schemas/UtcDateTime'
+        user:
+          $ref: '#/components/schemas/User'
+      required:
+      - accessToken
+      - tokenType
+      - expiresAt
+      - user
+      additionalProperties: false
+    Genre:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+      required:
+      - id
+      - name
+      additionalProperties: false
+    BookCounts:
+      type: object
+      properties:
+        totalCopies:
+          type: integer
+          minimum: 0
+        reservedCopies:
+          type: integer
+          description: Заявки PROCESSING и APPROVED.
+          minimum: 0
+        borrowedCopies:
+          type: integer
+          description: Заявки ISSUED и OVERDUE.
+          minimum: 0
+        availableCopies:
+          type: integer
+          description: totalCopies − reservedCopies − borrowedCopies.
+          minimum: 0
+      required:
+      - totalCopies
+      - reservedCopies
+      - borrowedCopies
+      - availableCopies
+      additionalProperties: false
+    BookSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        author:
+          type: string
+        coverUrl:
+          type:
+          - string
+          - 'null'
+          description: HTTPS URL обложки или null.
+          format: uri
+        genres:
+          type: array
+          items:
+            type: string
+        averageRating:
+          type:
+          - number
+          - 'null'
+          description: Среднее значение оценок либо null, если оценок нет.
+        reviewCount:
+          type: integer
+          minimum: 0
+        totalCopies:
+          type: integer
+          minimum: 0
+        reservedCopies:
+          type: integer
+          minimum: 0
+        borrowedCopies:
+          type: integer
+          minimum: 0
+        availableCopies:
+          type: integer
+          minimum: 0
+        acceptingReservations:
+          type: boolean
+      required:
+      - id
+      - title
+      - author
+      - coverUrl
+      - genres
+      - averageRating
+      - reviewCount
+      - totalCopies
+      - reservedCopies
+      - borrowedCopies
+      - availableCopies
+      - acceptingReservations
+      additionalProperties: false
+    BookDetail:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        author:
+          type: string
+        coverUrl:
+          type:
+          - string
+          - 'null'
+          description: HTTPS URL обложки или null.
+          format: uri
+        genres:
+          type: array
+          items:
+            type: string
+        averageRating:
+          type:
+          - number
+          - 'null'
+          description: Среднее значение оценок либо null, если оценок нет.
+        reviewCount:
+          type: integer
+          minimum: 0
+        totalCopies:
+          type: integer
+          minimum: 0
+        reservedCopies:
+          type: integer
+          minimum: 0
+        borrowedCopies:
+          type: integer
+          minimum: 0
+        availableCopies:
+          type: integer
+          minimum: 0
+        acceptingReservations:
+          type: boolean
+        series:
+          type:
+          - string
+          - 'null'
+        description:
+          type:
+          - string
+          - 'null'
+        publisher:
+          type: string
+        publicationYear:
+          type: integer
+        isbn:
+          type:
+          - string
+          - 'null'
+        archivedAt:
+          anyOf:
+          - $ref: '#/components/schemas/UtcDateTime'
+          - type: 'null'
+        createdAt:
+          $ref: '#/components/schemas/UtcDateTime'
+        updatedAt:
+          $ref: '#/components/schemas/UtcDateTime'
+      required:
+      - id
+      - title
+      - author
+      - coverUrl
+      - genres
+      - averageRating
+      - reviewCount
+      - totalCopies
+      - reservedCopies
+      - borrowedCopies
+      - availableCopies
+      - acceptingReservations
+      - series
+      - description
+      - publisher
+      - publicationYear
+      - isbn
+      - archivedAt
+      - createdAt
+      - updatedAt
+      additionalProperties: false
+    BookCreateRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        author:
+          type: string
+        genres:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        publisher:
+          type: string
+        publicationYear:
+          type: integer
+        series:
+          type:
+          - string
+          - 'null'
+        description:
+          type:
+          - string
+          - 'null'
+        isbn:
+          type:
+          - string
+          - 'null'
+        totalCopies:
+          type: integer
+          minimum: 0
+        acceptingReservations:
+          type: boolean
+      required:
+      - title
+      - author
+      - genres
+      - publisher
+      - publicationYear
+      - totalCopies
+      - acceptingReservations
+      additionalProperties: false
+    BookUpdateRequest:
+      type: object
+      description: 'PATCH: указываются только изменяемые поля.'
+      properties:
+        title:
+          type: string
+        author:
+          type: string
+        genres:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        publisher:
+          type: string
+        publicationYear:
+          type: integer
+        series:
+          type:
+          - string
+          - 'null'
+        description:
+          type:
+          - string
+          - 'null'
+        isbn:
+          type:
+          - string
+          - 'null'
+        totalCopies:
+          type: integer
+          minimum: 0
+        acceptingReservations:
+          type: boolean
+      additionalProperties: false
+    BookForReservation:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        author:
+          type: string
+        coverUrl:
+          type:
+          - string
+          - 'null'
+          format: uri
+        archived:
+          type: boolean
+      required:
+      - id
+      - title
+      - author
+      - coverUrl
+      - archived
+      additionalProperties: false
+    StudentBrief:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        fullName:
+          type: string
+        className:
+          type: string
+      required:
+      - id
+      - fullName
+      - className
+      additionalProperties: false
+    Reservation:
+      type: object
+      description: В ответах на списки/детали вложенные book/student добавляются, когда их требует экран; их отсутствие
+        допустимо.
+      properties:
+        id:
+          type: string
+          format: uuid
+        bookId:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/ReservationStatus'
+        requestedDurationDays:
+          $ref: '#/components/schemas/LoanDuration'
+        approvedDurationDays:
+          anyOf:
+          - $ref: '#/components/schemas/LoanDuration'
+          - type: 'null'
+        createdAt:
+          $ref: '#/components/schemas/UtcDateTime'
+        approvedAt:
+          anyOf:
+          - $ref: '#/components/schemas/UtcDateTime'
+          - type: 'null'
+        pickupDeadlineAt:
+          anyOf:
+          - $ref: '#/components/schemas/UtcDateTime'
+          - type: 'null'
+        issuedAt:
+          anyOf:
+          - $ref: '#/components/schemas/UtcDateTime'
+          - type: 'null'
+        dueAt:
+          anyOf:
+          - $ref: '#/components/schemas/UtcDateTime'
+          - type: 'null'
+        closedAt:
+          anyOf:
+          - $ref: '#/components/schemas/UtcDateTime'
+          - type: 'null'
+        closeReason:
+          anyOf:
+          - $ref: '#/components/schemas/CloseReason'
+          - type: 'null'
+        book:
+          $ref: '#/components/schemas/BookForReservation'
+        student:
+          $ref: '#/components/schemas/StudentBrief'
+        rejectionReason:
+          type:
+          - string
+          - 'null'
+      required:
+      - id
+      - bookId
+      - status
+      - requestedDurationDays
+      - approvedDurationDays
+      - createdAt
+      - approvedAt
+      - pickupDeadlineAt
+      - issuedAt
+      - dueAt
+      - closedAt
+      - closeReason
+      additionalProperties: false
+    CreateReservationRequest:
+      type: object
+      properties:
+        bookId:
+          type: string
+          format: uuid
+        requestedDurationDays:
+          $ref: '#/components/schemas/LoanDuration'
+      required:
+      - bookId
+      - requestedDurationDays
+      additionalProperties: false
+    ApproveReservationRequest:
+      type: object
+      properties:
+        approvedDurationDays:
+          $ref: '#/components/schemas/LoanDuration'
+      required:
+      - approvedDurationDays
+      additionalProperties: false
+    RejectReservationRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          description: Необязательное пояснение отказа.
+      additionalProperties: false
+    ReviewRequest:
+      type: object
+      properties:
+        rating:
+          type: integer
+          minimum: 1
+          maximum: 5
+        text:
+          type: string
+          minLength: 1
+          maxLength: 1000
+      required:
+      - rating
+      - text
+      additionalProperties: false
+    Review:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        studentId:
+          type: string
+          format: uuid
+        author:
+          type: string
+          description: ФИО автора рецензии.
+        bookId:
+          type: string
+          format: uuid
+        rating:
+          type: integer
+          minimum: 1
+          maximum: 5
+        text:
+          type: string
+        createdAt:
+          $ref: '#/components/schemas/UtcDateTime'
+        updatedAt:
+          $ref: '#/components/schemas/UtcDateTime'
+      required:
+      - id
+      - studentId
+      - author
+      - bookId
+      - rating
+      - text
+      - createdAt
+      - updatedAt
+      additionalProperties: false
+    Student:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        login:
+          type: string
+        fullName:
+          type: string
+        className:
+          type: string
+        role:
+          $ref: '#/components/schemas/Role'
+        status:
+          $ref: '#/components/schemas/AccountStatus'
+        hasOverdue:
+          type: boolean
+      required:
+      - id
+      - login
+      - fullName
+      - className
+      - role
+      - status
+      - hasOverdue
+      additionalProperties: false
+    UpdateStudentRequest:
+      type: object
+      description: Только ФИО и класс; логин, пароль и роль не меняются.
+      properties:
+        fullName:
+          type: string
+        className:
+          type: string
+      additionalProperties: false
+    UpdateStudentStatusRequest:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - REJECTED
+      required:
+      - status
+      additionalProperties: false
+    BookListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/BookSummary'
+        total:
+          type: integer
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        offset:
+          type: integer
+          minimum: 0
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      additionalProperties: false
+    GenreListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Genre'
+        total:
+          type: integer
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        offset:
+          type: integer
+          minimum: 0
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      additionalProperties: false
+    ReservationListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Reservation'
+        total:
+          type: integer
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        offset:
+          type: integer
+          minimum: 0
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      additionalProperties: false
+    ReviewListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Review'
+        total:
+          type: integer
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        offset:
+          type: integer
+          minimum: 0
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      additionalProperties: false
+    FavoriteListResponse:
+      type: object
+      description: Список избранных книг ученика.
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/BookSummary'
+        total:
+          type: integer
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        offset:
+          type: integer
+          minimum: 0
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      additionalProperties: false
+    StudentListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Student'
+        total:
+          type: integer
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        offset:
+          type: integer
+          minimum: 0
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      additionalProperties: false
