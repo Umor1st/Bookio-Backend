@@ -13,7 +13,7 @@ services:
       - caddy_config:/config
     networks:
       ingress:
-        ipv4_address: 172.30.87.2
+        ipv4_address: 172.30.87.3
     depends_on:
       bookio-backend:
         condition: service_healthy
