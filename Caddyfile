@@ -1,6 +1,15 @@
 {
 	https_port 8443
 	auto_https disable_redirects
+	servers {
+		listener_wrappers {
+			proxy_protocol {
+				allow 127.0.0.1/32 172.30.87.1/32
+				fallback_policy reject
+			}
+			tls
+		}
+	}
 }
 
 bookio.duckdns.org {
@@ -10,5 +19,7 @@ bookio.duckdns.org {
 			disable_http_challenge
 		}
 	}
-	reverse_proxy bookio-backend:8080
+	reverse_proxy bookio-backend:8080 {
+		header_up X-Bookio-Client-IP {http.request.remote.host}
+	}
 }
