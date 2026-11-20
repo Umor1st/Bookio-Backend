@@ -35,10 +35,12 @@ paths:
       summary: Зарегистрировать ученика
       description: >
         Создаёт роль STUDENT и статус PENDING, нормализует данные и сразу создаёт сессию.
-        Регистрация и сессия создаются атомарно. Если аккаунт с таким нормализованным логином
-        имеет статус REJECTED, его профиль и пароль заменяются новой регистрацией, статус
-        становится PENDING и выдаётся новая сессия. Если логин принадлежит аккаунту PENDING
-        или ACTIVE, ответ 409 с LOGIN_ALREADY_EXISTS.
+        Логин нормализуется к нижнему регистру до поиска и сохранения.
+        Регистрация и сессия создаются атомарно. Повторная регистрация с занятым логином
+        разрешена только для STUDENT со статусом REJECTED. Профиль и пароль обновляются,
+        статус становится PENDING, прежние сессии отзываются и выдаётся новая сессия.
+        Все изменения выполняются атомарно. Для любого другого занятого логина,
+        включая логин LIBRARIAN, возвращается 409 с LOGIN_ALREADY_EXISTS.
       x-allowed-roles: []
       x-access: public
       security: []
@@ -59,6 +61,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "409":
           $ref: "#/components/responses/Conflict"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -69,7 +73,9 @@ paths:
         - Auth
       operationId: login
       summary: Войти в систему
-      description: PENDING/REJECTED могут войти для получения своего статуса, но не работать с библиотекой.
+      description: >
+        Пользователь с любым допустимым статусом аккаунта (PENDING, ACTIVE или REJECTED) может войти.
+        PENDING и REJECTED получают сессию для просмотра своего статуса, но не могут работать с библиотекой.
       x-allowed-roles: []
       x-access: public
       security: []
@@ -89,7 +95,9 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/InvalidCredentials"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -100,6 +108,9 @@ paths:
         - Auth
       operationId: logout
       summary: Отозвать текущую сессию
+      description: >
+        Первый успешный logout отзывает только текущую сессию. После этого токен недействителен;
+        повторный запрос с тем же токеном получает 401 с кодом INVALID_SESSION.
       x-allowed-roles:
         - STUDENT
         - LIBRARIAN
@@ -1028,7 +1039,10 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      description: Непрозрачный серверный токен из /api/v1/auth/login.
+      description: >
+        Непрозрачный серверный токен из /api/v1/auth/register или /api/v1/auth/login.
+        Токен содержит 32 случайных байта, закодированных в Base64 URL-safe без padding (43 символа).
+        Сервер хранит только SHA-256-хеш токена.
   parameters:
     BookId:
       name: id
@@ -1081,13 +1095,19 @@ components:
         default: 0
   responses:
     BadRequest:
-      description: Некорректный запрос.
+      description: Некорректный формат или данные запроса; код ошибки INVALID_DATA.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    InvalidCredentials:
+      description: Неверный логин или пароль; код ошибки INVALID_CREDENTIALS.
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
     Unauthorized:
-      description: Отсутствующая или недействительная сессия.
+      description: Отсутствующая, некорректная, отозванная или истёкшая сессия; код ошибки INVALID_SESSION.
       content:
         application/json:
           schema:
@@ -1117,13 +1137,16 @@ components:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
     UnsupportedMediaType:
-      description: Неподдерживаемый формат файла.
+      description: Неподдерживаемый тип содержимого запроса. Код ошибки UNSUPPORTED_MEDIA_TYPE.
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
     TooManyRequests:
-      description: Превышена частота запросов.
+      description: >
+        Превышен лимит регистрации и входа. Оба маршрута используют общую квоту
+        30 запросов в минуту с одного IP-адреса и 120 запросов в минуту на экземпляр сервера.
+        Код ошибки RATE_LIMITED.
       content:
         application/json:
           schema:
@@ -1148,7 +1171,7 @@ components:
         - LIBRARIAN
     AccountStatus:
       type: string
-      description: Статус регистрации ученика.
+      description: Статус учётной записи.
       enum:
         - PENDING
         - ACTIVE
@@ -1192,11 +1215,15 @@ components:
       description: Продолжительность выдачи в днях (14 либо 28).
     ErrorCode:
       type: string
-      description: Согласованные бизнес-коды ошибок из архитектурного контракта.
+      description: Допустимые коды ошибок API.
       enum:
         - LOGIN_ALREADY_EXISTS
         - INVALID_CREDENTIALS
-        - SESSION_EXPIRED
+        - INVALID_DATA
+        - INTERNAL_ERROR
+        - UNSUPPORTED_MEDIA_TYPE
+        - RATE_LIMITED
+        - INVALID_SESSION
         - ACCOUNT_NOT_APPROVED
         - FORBIDDEN
         - BOOK_NOT_FOUND
@@ -1265,6 +1292,7 @@ components:
             - string
             - "null"
           maxLength: 100
+          minLength: 1
         grade:
           type:
             - integer
@@ -1296,7 +1324,8 @@ components:
       type: object
       description: >
         Строковые поля ФИО и класса обрезаются сервером через trim до сохранения.
-        middleName можно опустить или передать null; в ответе User поле всегда присутствует.
+        Пустое или состоящее только из пробелов middleName нормализуется в null;
+        в ответе User поле всегда присутствует и содержит непустую строку либо null.
       properties:
         login:
           type: string
@@ -1308,6 +1337,9 @@ components:
           type: string
           format: password
           minLength: 8
+          maxLength: 64
+          pattern: '^[!-~]{8,64}$'
+          description: От 8 до 64 печатных ASCII-символов без пробелов.
         lastName:
           type: string
           minLength: 1
@@ -1346,14 +1378,17 @@ components:
       properties:
         accessToken:
           type: string
-          minLength: 1
-          description: Непрозрачный случайный Bearer-токен.
+          minLength: 43
+          maxLength: 43
+          pattern: "^[A-Za-z0-9_-]{43}$"
+          description: 32 криптографически случайных байта в Base64 URL-safe без padding.
         tokenType:
           type: string
           enum:
             - Bearer
         expiresAt:
           $ref: "#/components/schemas/UtcDateTime"
+          description: Фактическое время истечения сессии — ровно через 30 дней после её создания.
         user:
           $ref: "#/components/schemas/User"
       required:
@@ -1375,6 +1410,9 @@ components:
         password:
           type: string
           format: password
+          minLength: 8
+          maxLength: 64
+          pattern: '^[!-~]{8,64}$'
       required:
         - login
         - password
@@ -1384,13 +1422,17 @@ components:
       properties:
         accessToken:
           type: string
-          description: Непрозрачный случайный Bearer-токен.
+          minLength: 43
+          maxLength: 43
+          pattern: "^[A-Za-z0-9_-]{43}$"
+          description: 32 криптографически случайных байта в Base64 URL-safe без padding.
         tokenType:
           type: string
           enum:
             - Bearer
         expiresAt:
           $ref: "#/components/schemas/UtcDateTime"
+          description: Фактическое время истечения сессии — ровно через 30 дней после её создания.
         user:
           $ref: "#/components/schemas/User"
       required:
@@ -1928,8 +1970,8 @@ components:
         Только ФИО и класс; логин, пароль и роль не меняются. Перед проверкой сервер обрезает
         строки через trim и отклоняет пустые после trim lastName, firstName и classLetter.
         После объединения PATCH с текущими данными ученика grade и classLetter должны
-        оставаться заполненными. middleName можно опустить или передать null; если передана
-        строка, сервер обрезает её пробелы и сохраняет, в том числе, пустую строку.
+        оставаться заполненными. Пустое или состоящее только из пробелов middleName
+        нормализуется сервером в null.
       minProperties: 1
       properties:
         lastName:

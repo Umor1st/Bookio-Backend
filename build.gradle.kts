@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.kotlin.jvm)
     application
+    alias(libs.plugins.kotlin.serialization)
 }
 
 group = "ru.bookio"
@@ -10,6 +11,11 @@ application { mainClass = "ru.bookio.bootstrap.MainKt" }
 kotlin { jvmToolchain(21) }
 
 dependencies {
+    implementation(libs.ktor.server.content.negotiation)
+    implementation(libs.ktor.serialization.json)
+    implementation(libs.ktor.server.status.pages)
+    implementation(libs.exposed.java.time)
+    implementation(libs.spring.security.crypto)
     implementation(libs.ktor.server.core)
     implementation(platform(libs.netty.bom))
     implementation(libs.ktor.server.netty)
@@ -19,6 +25,7 @@ dependencies {
     implementation(libs.flyway.postgresql)
     implementation(libs.hikari)
     implementation(libs.postgresql)
+    runtimeOnly(libs.jcl.over.slf4j)
     runtimeOnly(libs.logback.classic)
 
     testImplementation(kotlin("test"))

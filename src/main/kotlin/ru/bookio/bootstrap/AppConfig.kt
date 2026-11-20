@@ -2,7 +2,7 @@ package ru.bookio.bootstrap
 
 import ru.bookio.infrastructure.database.DatabaseConfig
 
-data class AppConfig(val port: Int, val database: DatabaseConfig) {
+data class AppConfig(val port: Int, val database: DatabaseConfig, val authTrustedProxyAddress: String? = null) {
     companion object {
         fun fromEnvironment(env: Map<String, String>): AppConfig {
             fun required(name: String): String = env[name]?.takeIf { it.isNotBlank() }
@@ -19,6 +19,7 @@ data class AppConfig(val port: Int, val database: DatabaseConfig) {
                     user = required("DB_USER"),
                     password = required("DB_PASSWORD"),
                 ),
+                authTrustedProxyAddress = env["AUTH_TRUSTED_PROXY_ADDRESS"]?.takeIf { it.isNotBlank() },
             )
         }
     }
