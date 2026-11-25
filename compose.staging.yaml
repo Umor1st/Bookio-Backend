@@ -1,0 +1,58 @@
+name: bookio-staging
+
+services:
+  api:
+    image: "ghcr.io/umor1st/bookio-backend:${STAGING_IMAGE_TAG:-latest}"
+    restart: unless-stopped
+    environment:
+      PORT: 8080
+      AUTH_TRUSTED_PROXY_ADDRESS: 172.30.88.3
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${STAGING_DB_NAME:?Set STAGING_DB_NAME}
+      DB_USER: ${STAGING_DB_USER:?Set STAGING_DB_USER}
+      DB_PASSWORD: ${STAGING_DB_PASSWORD:?Set STAGING_DB_PASSWORD}
+    volumes:
+      - bookio_covers:/app/covers
+    networks:
+      ingress:
+        aliases:
+          - bookio-staging-backend
+      backend:
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${STAGING_DB_NAME:?Set STAGING_DB_NAME}
+      POSTGRES_USER: ${STAGING_DB_USER:?Set STAGING_DB_USER}
+      POSTGRES_PASSWORD: ${STAGING_DB_PASSWORD:?Set STAGING_DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+networks:
+  ingress:
+    name: bookio-staging-ingress
+    external: true
+  backend:
+    internal: true
+
+volumes:
+  postgres_data:
+  bookio_covers:

@@ -1,5 +1,6 @@
 {
 	https_port 8443
+	default_bind 127.0.0.1 172.30.87.3
 	auto_https disable_redirects
 	servers {
 		listener_wrappers {
@@ -12,6 +13,12 @@
 	}
 }
 
+(bookio_proxy) {
+	reverse_proxy {args[0]} {
+		header_up X-Bookio-Client-IP {http.request.remote.host}
+	}
+}
+
 bookio.duckdns.org {
 	tls {
 		issuer acme {$ACME_CA} {
@@ -19,7 +26,15 @@ bookio.duckdns.org {
 			disable_http_challenge
 		}
 	}
-	reverse_proxy bookio-backend:8080 {
-		header_up X-Bookio-Client-IP {http.request.remote.host}
+	import bookio_proxy bookio-backend:8080
+}
+
+staging.bookio.duckdns.org {
+	tls {
+		issuer acme {$ACME_STAGING_CA} {
+			email {$ACME_EMAIL}
+			disable_http_challenge
+		}
 	}
+	import bookio_proxy bookio-staging-backend:8080
 }
