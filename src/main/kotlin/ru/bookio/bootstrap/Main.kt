@@ -10,6 +10,7 @@ import io.ktor.server.plugins.contentnegotiation.*
 import io.ktor.server.plugins.statuspages.*
 import io.ktor.server.response.*
 import java.time.Clock
+import kotlin.system.exitProcess
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import ru.bookio.application.auth.AuthService
@@ -59,8 +60,20 @@ fun Application.configureServer(
     healthRoutes()
     authRoutes(auth, limiter, trustedProxyAddress)
 }
-fun main() {
-    val config = AppConfig.fromEnvironment(System.getenv())
+fun main(args: Array<String>) {
+    val env = System.getenv()
+    when {
+        args.isEmpty() -> startServer(AppConfig.fromEnvironment(env))
+        args.contentEquals(arrayOf("create-librarian")) -> exitProcess(runCreateLibrarian(env))
+        args.contentEquals(arrayOf("update-librarian")) -> exitProcess(runUpdateLibrarian(env))
+        else -> {
+            System.err.println("Usage: Bookio-Backend [create-librarian|update-librarian]")
+            exitProcess(2)
+        }
+    }
+}
+
+private fun startServer(config: AppConfig) {
     DatabaseConnection.open(config.database).use { connection ->
         val auth = AuthService(PostgresAuthRepository(connection.database), BCryptPasswordHasher(), SecureTokens(), Clock.systemUTC())
         embeddedServer(Netty, port = config.port, host = "0.0.0.0") {
