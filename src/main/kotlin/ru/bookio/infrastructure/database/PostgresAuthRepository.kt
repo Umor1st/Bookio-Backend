@@ -13,6 +13,7 @@ import org.postgresql.util.PSQLException
 import ru.bookio.domain.error.*
 import ru.bookio.domain.model.*
 import ru.bookio.domain.repository.AuthRepository
+import ru.bookio.domain.repository.LibrarianRepository
 
 private object Users : Table("users") {
     val id = uuid("id"); val login = varchar("login", 32); val passwordHash = varchar("password_hash", 60)
@@ -25,7 +26,7 @@ private object Sessions : Table("sessions") {
     val id = uuid("id"); val userId = uuid("user_id"); val hash = varchar("token_hash", 64)
     val createdAt = timestamp("created_at"); val expiresAt = timestamp("expires_at"); val revokedAt = timestamp("revoked_at").nullable()
 }
-class PostgresAuthRepository(private val database: Database) : AuthRepository {
+class PostgresAuthRepository(private val database: Database) : AuthRepository, LibrarianRepository {
     override fun <T> transaction(block: () -> T): T = try {
         transaction(database) { block() }
     } catch (e: Exception) {
@@ -42,6 +43,36 @@ class PostgresAuthRepository(private val database: Database) : AuthRepository {
         if (lock) query.forUpdate()
         return query.singleOrNull()?.let(::row)
     }
+    override fun librarianExists(): Boolean = !Users.select(Users.id)
+        .where { Users.role eq Role.LIBRARIAN.name }
+        .limit(1)
+        .empty()
+
+    override fun insertLibrarianIfAvailable(user: User, now: Instant): Boolean = Users.insertIgnore {
+        setNewUserFields(it, user, now)
+    }.insertedCount == 1
+
+    override fun findLibrarianForUpdate(): User? = Users.selectAll()
+        .where { Users.role eq Role.LIBRARIAN.name }
+        .forUpdate()
+        .singleOrNull()?.let(::row)
+
+    override fun updateLibrarianCredentials(userId: UUID, login: String, passwordHash: String, now: Instant) {
+        val updated = Users.update({ (Users.id eq userId.toKotlinUuid()) and (Users.role eq Role.LIBRARIAN.name) }) {
+            it[Users.login] = login
+            it[Users.passwordHash] = passwordHash
+            it[updatedAt] = now
+        }
+        check(updated == 1)
+    }
+
+    private fun setNewUserFields(statement: UpdateBuilder<*>, user: User, now: Instant) {
+        statement[Users.id] = user.id.toKotlinUuid()
+        statement[Users.login] = user.login
+        statement[Users.createdAt] = now
+        setUserFields(statement, user, now)
+    }
+
     private fun setUserFields(statement: UpdateBuilder<*>, user: User, now: Instant) {
         statement[Users.passwordHash] = user.passwordHash
         statement[Users.lastName] = user.lastName
@@ -57,10 +88,7 @@ class PostgresAuthRepository(private val database: Database) : AuthRepository {
         if (existing) Users.update({ Users.id eq user.id.toKotlinUuid() }) {
             setUserFields(it, user, now)
         } else Users.insert {
-            it[id] = user.id.toKotlinUuid()
-            it[login] = user.login
-            it[createdAt] = now
-            setUserFields(it, user, now)
+            setNewUserFields(it, user, now)
         }
     }
     override fun revokeUserSessions(userId: UUID, now: Instant) { Sessions.update({ (Sessions.userId eq userId.toKotlinUuid()) and Sessions.revokedAt.isNull() }) { it[revokedAt] = now } }

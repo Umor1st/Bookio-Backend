@@ -13,13 +13,6 @@ import ru.bookio.domain.service.*
 class AuthService(private val repository: AuthRepository, private val passwords: PasswordHasher, private val tokens: Tokens, private val clock: Clock) {
     private val dbDispatcher = Dispatchers.IO.limitedParallelism(5)
     private val passwordDispatcher = Dispatchers.Default.limitedParallelism(2)
-    private fun invalid(): Nothing = throw AuthError(AuthErrorCode.INVALID_DATA)
-    private fun login(value: String): String {
-        if (!value.matches(Regex("[a-zA-Z0-9._-]{3,32}"))) invalid()
-        return value.lowercase(java.util.Locale.ROOT)
-    }
-    private fun password(value: String) { if (!value.matches(Regex("[!-~]{8,64}"))) invalid() }
-    private fun field(value: String, max: Int): String = value.trim().also { if (it.length !in 1..max) invalid() }
     private fun issue(user: User): AuthResult {
         val now = clock.instant().truncatedTo(java.time.temporal.ChronoUnit.MICROS)
         val token = tokens.generate()
@@ -28,11 +21,13 @@ class AuthService(private val repository: AuthRepository, private val passwords:
         return AuthResult(token, expires, user)
     }
     suspend fun register(input: Registration): AuthResult {
-        val login = login(input.login); password(input.password)
-        val last = field(input.lastName, 100); val first = field(input.firstName, 100)
-        val middle = input.middleName?.trim()?.takeIf { it.isNotEmpty() }?.let { field(it, 100) }
-        val letter = field(input.classLetter, 5)
-        if (input.grade !in 1..11) invalid()
+        val login = AuthInputRules.login(input.login)
+        AuthInputRules.password(input.password)
+        val last = AuthInputRules.name(input.lastName)
+        val first = AuthInputRules.name(input.firstName)
+        val middle = AuthInputRules.middleName(input.middleName)
+        val letter = AuthInputRules.field(input.classLetter, 5)
+        if (input.grade !in 1..11) AuthInputRules.invalid()
         val hash = withContext(passwordDispatcher) { passwords.hash(input.password) }
         return withContext(dbDispatcher) { repository.transaction {
             val existing = repository.findUser(login, true)
@@ -45,7 +40,8 @@ class AuthService(private val repository: AuthRepository, private val passwords:
         } }
     }
     suspend fun login(login: String, password: String): AuthResult {
-        val normalized = login(login); password(password)
+        val normalized = AuthInputRules.login(login)
+        AuthInputRules.password(password)
         val candidate = withContext(dbDispatcher) { repository.transaction { repository.findUser(normalized) } }
         if (candidate == null || !withContext(passwordDispatcher) { passwords.verify(password, candidate.passwordHash) }) throw AuthError(AuthErrorCode.INVALID_CREDENTIALS)
         return withContext(dbDispatcher) { repository.transaction {
